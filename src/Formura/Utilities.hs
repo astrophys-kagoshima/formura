@@ -99,9 +99,11 @@ readYaml fn = do
       hPutStrLn stderr $ "When reading " ++ fn ++ "\n" ++ Y.prettyPrintParseException msg
       return Nothing
     Right x -> return $ Just x
-
+-- Yamlファイルの読み込み．
+-- ToJSONはJSONに変換可能な型,fromJSONはJSONから変換可能な型．
 readYamlDef :: (Y.ToJSON a, Y.FromJSON a) => a -> FilePath -> IO (Maybe a)
 readYamlDef def fn = do
+  --Yamlファイルをデコードして，成功した場合，読み込んだYamlとデフォルトYamlの和集合を取って，エンコード．再びでコード．成功した場合，Just xで返す．
   Y.decodeFileEither fn >>= \case
     Left msg -> do
       hPutStrLn stderr $ "When reading " ++ fn ++ "\n" ++ Y.prettyPrintParseException msg

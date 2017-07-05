@@ -39,6 +39,7 @@ instance Show (ElemTypeF x) where
 
 pattern ElemType x <- ((^? match) -> Just (ElemTypeF x)) where ElemType x = match # ElemTypeF x
 
+-- TypeModifier manifest型の表現もここ．
 data TypeModifier = TMConst | TMManifest | TMExtern
                  deriving (Eq, Ord, Typeable, Data)
 instance Show TypeModifier where

@@ -196,8 +196,12 @@ imm = "rational literal" ?> parseIn $ do
   Imm <$> constRational
 
 exprOf :: (OperatorF ∈ fs, ApplyF  ∈ fs) => P (Lang fs) -> P (Lang fs)
+-- buildExpressionParserはText.Prser.Expressionで定義されている．
+-- 二項演算子のパーサーリストtblとtermParserから，式全体のパーサーを構築する．
 exprOf termParser = X.buildExpressionParser tbl termParser
   where
+           -- Binop "+"は+の2項演算子,
+           -- Uniop "+" は+の単項演算子,...
     tbl = [[binary "." (Binop ".") X.AssocRight],
            [binary "**" (Binop "**") X.AssocLeft],
            [binary "*" (Binop "*") X.AssocLeft, binary "/" (Binop "/") X.AssocLeft],
@@ -241,6 +245,7 @@ exprOf termParser = X.buildExpressionParser tbl termParser
 expr10 :: P RExpr
 expr10 = fexpr
 
+--右辺式パーサ，findArgumentは，再帰的パースをする．
 fexpr :: P RExpr
 fexpr = "function application chain" ?> do
   f <- aexpr
@@ -258,6 +263,7 @@ fexpr = "function application chain" ?> do
             Nothing ->  return f
 
 
+--右辺式,右辺式のタプル，let式，lambda式，ifThenElse式，identity，即値
 aexpr :: P RExpr
 aexpr = tupleOf rExpr <|> letExpr <|> lambdaExpr <|> ifThenElseExpr <|> ident <|> imm
 
@@ -288,8 +294,11 @@ ifThenElseExpr = "if-then-else expression" ?> parseIn $ do
   return $ Triop "ite" cond x y
 
 
+-- BindingFはFormura.Syntaxで定義．実体はStatementFのリスト
+-- stetmentは入れ子構造で解析されるが，返り値はconcatで平らにされる．
 binding :: P (BindingF RExpr)
 binding = "statements" ?> do
+  --statementDelimiterで区切られたstatementCompoundのリスト
   stmts <- statementCompound `sepEndBy` statementDelimiter
   return $ Binding $ concat stmts
 
@@ -298,15 +307,20 @@ statementDelimiter = "statement delimiter" ?> some d >> return ()
   where
     d = (symbolic ';' >> return ()) <|> (newline >> whiteSpace)
 
+--関数宣言，もしくは代入構文
 statementCompound :: P [StatementF RExpr]
 statementCompound = functionSyntaxSugar <|> typeValueStatements
 
+--関数宣言
+--"begin function step(a,b,c) ... end function"
 functionSyntaxSugar :: P [StatementF RExpr]
 functionSyntaxSugar = "function definition" ?> do
   keyword "begin"
   keyword "function"
   (funName, inExpr, outExpr) <-
+    -- 関数の頭 "init() returns (U,V)"
     ("returns-form" ?> try returnsForm) <|>
+    -- 別バージョン "(U,V) = init()"
     ("equal-form" ?> try equalForm) <|>
     raiseErr (Err (Just $ Ppr.text "Malformed Function Syntax" <> Ppr.line)
               [Ppr.text "Please check if you are using one of the following forms:",
@@ -314,9 +328,12 @@ functionSyntaxSugar = "function definition" ?> do
                Ppr.text "・  begin function y = f(x)"]
               S.empty)
   statementDelimiter
+  --関数本体
   b <- binding
+  -- "end function"
   keyword "end"
   keyword "function"
+  -- funName = λ inExpr. b outExpr
   return [Subst funName $ Lambda inExpr $ Let b outExpr]
   where
     returnsForm :: P (LExpr, LExpr, RExpr)
@@ -336,10 +353,14 @@ functionSyntaxSugar = "function definition" ?> do
       return (fn, inx, outx)
 
 
+--Formura型宣言付きの代入構文
 typeValueStatements :: P [StatementF RExpr]
 typeValueStatements = "type-decl and/or substitiution statement" ?> do
+  --"型名 ::"
+  --型名はmodTypeExpr
   maybeType <- optional $ "statement start by type decl" ?> try $ modTypeExpr <* keyword "::"
 
+      -- 左辺式=右辺式(右辺式はなくてもいい)
   let lhsAndMaybeRhs :: P (LExpr, Maybe RExpr)
       lhsAndMaybeRhs = do
         lhs   <- lExpr
@@ -347,21 +368,27 @@ typeValueStatements = "type-decl and/or substitiution statement" ?> do
         return (lhs, mRhs)
   lamrs <- case maybeType of
     -- When there is type, we allow multiple substitutions, and lhs-only terms.
+    -- 有効な型があった場合,区切りの左辺しき（右辺式）
     Just _ -> lhsAndMaybeRhs `sepBy1` symbol ","
     -- When there is no type, we allow only one substitution.
+    -- 有効な型がない場合，左辺式=右辺式
     Nothing -> "simple substitution expression" ?> do
       lhs <- lExpr
       keyword "="
       rhs <- rExpr
       return [(lhs, Just rhs)]
 
+      -- 型宣言+左辺式/型と左辺式は直積で合体する(一つの型に対して複数の左辺式があるため）
   let typePart = [ TypeDecl typ lhs
                  | typ <- maybeToList maybeType,
                    lhs <- map fst lamrs
                    ]
+      -- 左辺式+右辺式
       substPart = [Subst lhs rhs
                    | (lhs, Just rhs) <- lamrs]
   -- Type definitions always come before the values.
+  -- 変数宣言と代入分を別々のステートメントに分けて，
+  -- 単一のリストに入れる．typeの方が先に来る．
   return $ typePart ++ substPart
 
 
@@ -377,8 +404,10 @@ vectorIndexOf content = do
   symbolic ')'
   return r
 
+-- 左辺式のパース
 lFexpr :: P LExpr
 lFexpr = "applied l-expr" ?> do
+  -- lAexprをパースして出てきたものをgoで新たなパーサにする．
   f <- lAexpr
   go f
   where
@@ -397,7 +426,7 @@ lExpr :: P LExpr
 lExpr = "l-expr" ?> lFexpr
 
 
-
+-- "manifest Double [1/2,1/2]"
 modTypeExpr :: P ModifiedTypeExpr
 modTypeExpr = do
   tm1 <- many typeModifier
@@ -407,12 +436,14 @@ modTypeExpr = do
    Nothing -> ModifiedTypeExpr (tm1 ++ tm2) TopType
    Just t -> ModifiedTypeExpr (tm1 ++ tm2) t
 
+-- typeModifier "manifest" をTMManifest
 typeModifier :: P TypeModifier
 typeModifier = (TMConst <$ keyword "const") <|> (TMExtern <$ keyword "extern") <|> (TMManifest <$ keyword "manifest")
 
 typeAexpr :: P TypeExpr
 typeAexpr = "atomic type-expression" ?> tupleOf typeFexpr <|> elemType <|> funType
 
+-- グリッドの型(次元，オフセット）,ベクトルの次元
 typeFexpr :: P TypeExpr
 typeFexpr = "applied type-expression" ?> do
   f <- typeAexpr
@@ -430,6 +461,7 @@ typeFexpr = "applied type-expression" ?> do
             Nothing -> return f
 
 
+-- 右辺式のパース,
 rExpr :: P RExpr
 rExpr = "r-expr" ?> exprOf expr10
 
@@ -458,42 +490,66 @@ constIntExpr :: P Int
 constIntExpr = fromInteger <$> natural
 
 
+-- SpecialDeclarationのパーサー
+-- DimensionDeclarationとAxesDeclarationをパースする．
 specialDeclaration :: P SpecialDeclaration
 specialDeclaration = dd  <|> ad
   where
+    -- 次元の宣言"dimension :: 3"をDimencionDeclaration 3にする．
     dd = do
+      -- tryはText.Parser.Combinatorsで定義．パーサーを実行して，消費する．ただし，パースに失敗した場合，消費しない．
       "dimension declaration" ?> try $ keyword "dimension"
       keyword "::"
       n <- natural
       return $ DimensionDeclaration $ fromInteger n
     ad = do
+      --軸の宣言 "axes :: x,y,z
       "axes declaration" ?> try $ keyword "axes"
       keyword "::"
       xs <- identName `sepBy` symbolic ','
       return $ AxesDeclaration xs
 
+-- Formuraパーサーの本体
+-- Program型はFormura.Syntaxで定義される型．
+-- 特殊宣言，束縛，設定をレコードとして持つ．
 program :: WithCommandLineOption => P Program
 program = do
-
+  -- パーサーをモナドとして実行．
+  -- choiceはText.Parser.Combinatorsで定義．パーサーのリストを順番に適応して，最初に成功したパーサーを返す．
   ps <- choice [Left <$> specialDeclaration, Right <$> statementCompound]
+  -- sepEndByはText.Parser.Combinatorsで定義．左側のパーサーが右側のパーサーで区切られて連続する時，左側のパーサーのリストを返す．
         `sepEndBy` statementDelimiter
+  --psには，Left specialDeclarationかRight statementCompoundのいずれかが繰り返し入る．
+  -- partitionEithersはData.Eithersで定義．Either a bのLeftとRightをそれぞれ別のリストにまとめて，タプルにして返す．
   let (decls, stmts) = partitionEithers ps
+  -- declsにはspecial Declarationが，stmtsにはstatementCompoundが入る．
 
+  -- unsafePerformIOはIOの文脈を外す． 
+  -- readYamlDefはFormura.Utilitiesで定義．
+  -- ファイルから読み込んだYamlとデフォルトの設定の和集合がmncに入る．
   let mnc = unsafePerformIO $ readYamlDef defaultNumericalConfig ncFilePath
+  -- nc0にはNumericalConfig型の値が入る．
   nc0 <- case mnc of
      Nothing -> raiseErr $ failed $ "cannot parse numerical config .yaml file: " ++ show ncFilePath
      Just x -> return (x :: NumericalConfig)
 
+  -- Lensの機能を使って，nc0のncOptionStringsにコマンドラインからきた情報を追加．
   let nc = nc0 & ncOptionStrings %~ ((?commandLineOption ^. auxNumericalConfigOptions) ++)
+      --IntraNodeShapeとMPIGridShapeをかけて，計算領域全体の広がりを得る．
   let globalExtents = toList $ (nc ^. ncIntraNodeShape) * (nc ^. ncMPIGridShape)
+      --declsはSpecialDeclarationのリスト，その中からAxesDeclarationの[IdentName]をとってくる．(複数あった場合は一番最初のみ)
       ivars = head [x | AxesDeclaration x <- decls]
 
+      --各軸の名前(x,y,z)からNX,NY,NZのような名前にする．
       extentVarNames :: [IdentName]
       extentVarNames = map (("N" ++) . map toUpper) ivars
 
+      --変数への代入をStatementF RExpr型で返す．
       mkExtentStmt :: IdentName -> Int -> StatementF RExpr
       mkExtentStmt x n = SubstF (Ident x) (Imm $ fromIntegral n)
 
+      -- "NX = 128"のよな，各軸のグリッドサイズを代入する代入構文を作る．
       globalExtentStmts = zipWith mkExtentStmt extentVarNames globalExtents
 
+  --特殊宣言，グリッドサイズ代入＋その他の代入文をBindingF RExpr,Numericalconfigにして，Program型に入れてしまう．
   return $ Program decls (BindingF $ globalExtentStmts ++ concat stmts) nc
