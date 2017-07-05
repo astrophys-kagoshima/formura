@@ -1,0 +1,9 @@
+examples/*.c
+examples/*.h
+*.swp
+bin/
+CMakeFiles
+CMakeCache.txt
+.stack-work/
+Makefile
+cmake_install.cmake
